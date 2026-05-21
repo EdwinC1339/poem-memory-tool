@@ -1,9 +1,14 @@
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 
-use crate::poem::{Poem, Stanza};
+use crate::poem::Poem;
 use crate::comparison::Comparison;
 
 use unicode_segmentation::UnicodeSegmentation;
+
+pub enum GameMode {
+    Blank,
+    Practice,
+}
 
 /// Create a comparison
 fn line_comparison<'a>(poem_line: &'a str, user_line: &'a str) -> Comparison<'a> {
@@ -11,15 +16,21 @@ fn line_comparison<'a>(poem_line: &'a str, user_line: &'a str) -> Comparison<'a>
 }
 
 /// Given a line from the poem and a line from the user, generate a line of annotations.
-/// The annotations take the form 
+/// The annotation is a ^ under every error from the user, or a * if there's multiple errors in one space (eg if the user forgot multiple characters)
 fn annotate(poem_line: &str, user_line: &str) -> String {
     let comparison = line_comparison(poem_line, user_line);
     let mut annotation = String::new();
 
     for edit in comparison.edits() {
-        let spaces_to_add = edit.position() - annotation.graphemes(true).count();
-        annotation.push_str(&" ".repeat(spaces_to_add));
-        annotation.push('^');
+        let spaces_to_add = edit.position_comparison() as isize - annotation.graphemes(true).count() as isize;
+        
+        if spaces_to_add >= 0 {
+            annotation.push_str(&" ".repeat(spaces_to_add as usize));
+            annotation.push('^');
+        } else {
+            annotation.pop();
+            annotation.push('*');
+        }
     }
 
     annotation
@@ -62,6 +73,15 @@ mod test {
         let poem_line = "once upon a midnight dreary";
         let user_line = "once uon midnight dreary";
         let annotation = annotate(poem_line, user_line);
-        assert_eq!(&annotation, "      ^   ^^")
+        assert_eq!(&annotation, "      ^  *")
+    }
+
+    #[test]
+    fn annotate3() {
+        let poem_line = "Panem nostrum quotidianum da nobis hodie";
+        let user_line = "panem quotidianum da nobis hodie";
+        let expected  = "^     *";
+        let annotation = annotate(poem_line, user_line);
+        assert_eq!(&annotation, expected)
     }
 }

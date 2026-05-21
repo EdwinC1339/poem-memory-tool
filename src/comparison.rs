@@ -10,13 +10,14 @@ pub struct Comparison<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Edit<'a> {
-    position: usize,
+    position_ground_truth: usize,
+    position_comparison: usize,
     do_what: EditDoWhat<'a>
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum EditDoWhat<'a> {
-    Deletion,
+    Deletion(&'a str),
     Insertion(&'a str),
     Substitution(&'a str),
 }
@@ -47,7 +48,6 @@ impl<'a> Comparison<'a> {
                 iter::repeat_n(0, columns)
                 .collect_vec(), rows
             ).collect_vec();
-        let mut edits = Vec::new();
     
         for column_index in 1..columns {
             distance_matrix[0][column_index] = column_index;
@@ -73,6 +73,9 @@ impl<'a> Comparison<'a> {
         }
         
         // Now it's necessary to backtrace how to get from b to a.
+        // We will trace back each of the edits then add them to a stack.
+        // We will traverse that stack again backwards to make the necessary adjustments for the positions of the edits in the comparison string.
+        let mut edit_stack = Vec::new();
         let mut distance = distance_matrix[rows - 1][columns - 1];
         let mut row_index = rows - 1;
         let mut column_index = columns - 1;
@@ -104,26 +107,85 @@ impl<'a> Comparison<'a> {
 
         let max_length = max(rows, columns) - 1;
         for (i, (pos1, pos2)) in backtrace.iter().zip(backtrace.iter().skip(1)).enumerate() {
+            let a_grapheme = a_graphemes[pos1.1 - 1];
             if pos1.0 != pos2.0 {
                 let edit_do_what = match (pos1.1.cmp(&pos2.1), pos1.2.cmp(&pos2.2)) {
-                    (Ordering::Greater, Ordering::Greater) => EditDoWhat::Substitution(a_graphemes[pos1.1 - 1]),
-                    (Ordering::Greater, Ordering::Equal) => EditDoWhat::Insertion(a_graphemes[pos1.1 - 1]),
-                    (Ordering::Equal, Ordering::Greater) => EditDoWhat::Deletion,
+                    (Ordering::Greater, Ordering::Greater) => EditDoWhat::Substitution(a_grapheme),
+                    (Ordering::Greater, Ordering::Equal) => EditDoWhat::Insertion(a_grapheme),
+                    (Ordering::Equal, Ordering::Greater) => EditDoWhat::Deletion(a_grapheme),
                     _ => panic!("There shouldn't be lesser comparisons, nor both equal!")
                 };
 
-                edits.push(Edit { position: max_length - i - 1, do_what: edit_do_what });
+                // To calculate the position of an edit in the ground truth, we can subtract the number of steps we're going down from the total length.
+                // We adjust by -1 to account for the extra row we're adding in the matrix.
+                let position_ground_truth = max_length - i - 1;
+
+                edit_stack.insert(0, (position_ground_truth, edit_do_what));
             }
         }
 
-        edits.reverse();
+        let mut edits = Vec::new();
+        let mut drift_adjustment: isize = 0;
+        for (position_ground_truth, do_what) in edit_stack {
+            // To calculate the position of the edit in the comparison string, we adjust the position in the ground truth by the drift adjustment.
+            let position_comparison = (position_ground_truth as isize + drift_adjustment) as usize;
+
+            // To calculate the drift adjustment, we increment it every step where there's a deletion, then decrement it with every insertion.
+            match do_what {
+                EditDoWhat::Deletion(_) => drift_adjustment += 1,
+                EditDoWhat::Insertion(_) => drift_adjustment -= 1,
+                EditDoWhat::Substitution(_) => (),
+            }
+
+            let edit = Edit {position_ground_truth, position_comparison, do_what};
+            edits.push(edit);
+        }
+
         edits
+    }
+
+    pub fn score(&self) -> i32 {
+        self.errors.iter().map(|edit| edit.score()).sum()
     }
 }
 
 impl<'a> Edit<'a> {
-    pub fn position(&self) -> usize {
-        self.position
+    pub fn position_ground_truth(&self) -> usize {
+        self.position_ground_truth
+    }
+
+    pub fn position_comparison(&self) -> usize {
+        self.position_comparison
+    }
+
+    /// Gives the score for the edit.  
+    /// Minor errors: 1 point
+    /// - punctuation
+    /// - whitespace
+    /// Major errors: 5 points
+    /// - Anything else
+    pub fn score(&self) -> i32 {
+        let error_string = match self.do_what {
+            EditDoWhat::Deletion(e) => e,
+            EditDoWhat::Insertion(e) => e,
+            EditDoWhat::Substitution(e) => e,
+        };
+
+        // Assume any grapheme that's more than one char must be a major error.
+        if error_string.chars().count() != 1 {
+            5
+        } else if let Some(ch) = error_string.chars().next() {
+            if ch.is_ascii_punctuation() {
+                1
+            } else if ch.is_whitespace() {
+                1
+            } else {
+                5
+            }
+        } else {
+            // This branch means that there is no error which is an invalid state. 
+            panic!("Edit with blank error string")
+        }
     }
 }
 
@@ -160,7 +222,7 @@ mod test {
         let comparison = Comparison::build(s1, s2);
         let edit = comparison.edits().next().unwrap();
         assert_eq!(edit.do_what, EditDoWhat::Substitution(&"n"));
-        assert_eq!(edit.position, 4);
+        assert_eq!(edit.position_ground_truth, 4);
     }
 
     #[test]
@@ -173,11 +235,11 @@ mod test {
         
         let edit = edits.next().unwrap();
         assert_eq!(edit.do_what, EditDoWhat::Substitution(&"n"));
-        assert_eq!(edit.position, 4);
+        assert_eq!(edit.position_ground_truth, 4);
 
         let edit = edits.next().unwrap();
         assert_eq!(edit.do_what, EditDoWhat::Substitution(&"e"));
-        assert_eq!(edit.position, 8);
+        assert_eq!(edit.position_ground_truth, 8);
     }
 
     #[test]
@@ -188,7 +250,7 @@ mod test {
         let comparison = Comparison::build(s1, s2);
         let edit = comparison.edits().next().unwrap();
         assert_eq!(edit.do_what, EditDoWhat::Insertion(&"n"));
-        assert_eq!(edit.position, 4);
+        assert_eq!(edit.position_ground_truth, 4);
     }
 
     #[test]
@@ -201,11 +263,11 @@ mod test {
         
         let edit = edits.next().unwrap();
         assert_eq!(edit.do_what, EditDoWhat::Insertion(&"n"));
-        assert_eq!(edit.position, 4);
+        assert_eq!(edit.position_ground_truth, 4);
 
         let edit = edits.next().unwrap();
         assert_eq!(edit.do_what, EditDoWhat::Insertion(&"e"));
-        assert_eq!(edit.position, 8);
+        assert_eq!(edit.position_ground_truth, 8);
     }
 
     #[test]
@@ -218,10 +280,10 @@ mod test {
         
         let edit = edits.next().unwrap();
         assert_eq!(edit.do_what, EditDoWhat::Insertion(&"l"));
-        assert_eq!(edit.position, 0);
+        assert_eq!(edit.position_ground_truth, 0);
 
         let edit = edits.next().unwrap();
         assert_eq!(edit.do_what, EditDoWhat::Insertion(&"e"));
-        assert_eq!(edit.position, 1);
+        assert_eq!(edit.position_ground_truth, 1);
     }
 }
