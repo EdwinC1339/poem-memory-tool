@@ -36,6 +36,7 @@ fn annotate(poem_line: &str, user_line: &str) -> String {
     annotation
 }
 
+// TODO: scoring
 pub fn blank_game(poem: Poem) {
     for (stanza_n, stanza) in poem.stanzas().iter().enumerate() {
         println!("Begin stanza {}", stanza_n + 1);
@@ -52,6 +53,24 @@ pub fn blank_game(poem: Poem) {
             let annotation = annotate(line, user_input);
             println!("Line {:>2}:\t{}", line_n, annotation);
             println!("Line {:>2}:\t{}", line_n, line);
+        }
+    }
+}
+
+pub fn practice_game(poem: Poem) {
+    for (stanza_n, stanza) in poem.stanzas().iter().enumerate() {
+        println!("Begin stanza {}", stanza_n + 1);
+        for (line_n, line) in stanza.verses().iter().enumerate() {
+            let line = line.as_str();
+
+            println!("Line {:>2}:\t{}", line_n, line);
+            
+            print!("Line {:>2}:\t", line_n);
+            io::stdout().flush().expect("couldn't flush stdout");
+
+            let mut user_input= String::new();
+            io::stdin().read_line(&mut user_input).expect("couldn't read input");
+            let user_input = user_input.trim_end();
         }
     }
 }

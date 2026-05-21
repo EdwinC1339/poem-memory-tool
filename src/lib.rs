@@ -5,13 +5,13 @@ pub mod menu;
 
 use anyhow::Result;
 
-use crate::{memory_tool::blank_game, menu::start_menu};
+use crate::{memory_tool::{blank_game, practice_game}, menu::start_menu};
 
 pub fn run() -> Result<()> {
     let choices = start_menu()?;
     match choices.mode {
         memory_tool::GameMode::Blank => blank_game(choices.poem),
-        memory_tool::GameMode::Practice => todo!(),
+        memory_tool::GameMode::Practice => practice_game(choices.poem),
     }
 
     Ok(())
