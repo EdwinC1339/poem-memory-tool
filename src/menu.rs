@@ -32,7 +32,7 @@ fn get_user_choice(max: usize) -> usize {
         
         let parse = buffer.parse::<usize>();
         match parse {
-            Ok(choice) if choice > max => warn_user(max),
+            Ok(choice) if choice <= 1 || choice > max => warn_user(max),
             Err(_) => warn_user(max),
             Ok(_) => done = true,
         }
