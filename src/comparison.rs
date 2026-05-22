@@ -118,7 +118,7 @@ impl<'a> Comparison<'a> {
 
                 // To calculate the position of an edit in the ground truth, we can subtract the number of steps we're going down from the total length.
                 // We adjust by -1 to account for the extra row we're adding in the matrix.
-                let position_ground_truth = max_length - i - 1;
+                let position_ground_truth = max_length.saturating_sub(i).saturating_sub(1);
 
                 edit_stack.insert(0, (position_ground_truth, edit_do_what));
             }
@@ -285,5 +285,32 @@ mod test {
         let edit = edits.next().unwrap();
         assert_eq!(edit.do_what, EditDoWhat::Insertion(&"e"));
         assert_eq!(edit.position_ground_truth, 1);
+    }
+
+    #[test]
+    fn score1() {
+        let s1 = "levenshtein";
+        let s2 = "leenshtein";
+
+        let comparison = Comparison::build(s1, s2);
+        assert_eq!(comparison.score(), 5);
+    }
+
+    #[test]
+    fn score2() {
+        let s1 = "levenshtein";
+        let s2 = "le.enshtein";
+
+        let comparison = Comparison::build(s1, s2);
+        assert_eq!(comparison.score(), 5);
+    }
+
+    #[test]
+    fn score3() {
+        let s1 = "levenshtein.";
+        let s2 = "levenshtein";
+
+        let comparison = Comparison::build(s1, s2);
+        assert_eq!(comparison.score(), 1);
     }
 }

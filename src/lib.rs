@@ -9,10 +9,12 @@ use crate::{memory_tool::{blank_game, practice_game}, menu::start_menu};
 
 pub fn run() -> Result<()> {
     let choices = start_menu()?;
-    match choices.mode {
+    let report = match choices.mode {
         memory_tool::GameMode::Blank => blank_game(choices.poem),
         memory_tool::GameMode::Practice => practice_game(choices.poem),
-    }
+    };
+
+    println!("Game over\n{}", report);
 
     Ok(())
 }
