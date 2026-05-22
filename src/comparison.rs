@@ -2,6 +2,7 @@ use std::{cmp::{Ordering, max}, iter};
 
 use itertools::Itertools;
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Comparison<'a> {
@@ -19,7 +20,7 @@ pub struct Edit<'a> {
 enum EditDoWhat<'a> {
     Deletion(&'a str),
     Insertion(&'a str),
-    Substitution(&'a str),
+    Substitution{ground_truth: &'a str, comparison: &'a str},
 }
 
 impl<'a> Comparison<'a> {
@@ -110,7 +111,11 @@ impl<'a> Comparison<'a> {
             let a_grapheme = a_graphemes[pos1.1 - 1];
             if pos1.0 != pos2.0 {
                 let edit_do_what = match (pos1.1.cmp(&pos2.1), pos1.2.cmp(&pos2.2)) {
-                    (Ordering::Greater, Ordering::Greater) => EditDoWhat::Substitution(a_grapheme),
+                    (Ordering::Greater, Ordering::Greater) => {
+                        let b_grapheme = b_graphemes[pos1.2 - 1];
+                        EditDoWhat::Substitution { ground_truth: a_grapheme, comparison: b_grapheme }
+                        
+                    },
                     (Ordering::Greater, Ordering::Equal) => EditDoWhat::Insertion(a_grapheme),
                     (Ordering::Equal, Ordering::Greater) => EditDoWhat::Deletion(a_grapheme),
                     _ => panic!("There shouldn't be lesser comparisons, nor both equal!")
@@ -134,7 +139,7 @@ impl<'a> Comparison<'a> {
             match do_what {
                 EditDoWhat::Deletion(_) => drift_adjustment += 1,
                 EditDoWhat::Insertion(_) => drift_adjustment -= 1,
-                EditDoWhat::Substitution(_) => (),
+                EditDoWhat::Substitution{ground_truth: _, comparison: _} => (),
             }
 
             let edit = Edit {position_ground_truth, position_comparison, do_what};
@@ -147,6 +152,14 @@ impl<'a> Comparison<'a> {
     pub fn score(&self) -> i32 {
         self.errors.iter().map(|edit| edit.score()).sum()
     }
+}
+
+/// Try to strip away all the capitalization and diacritics from a grapheme to turn it into a 'neutral' char.
+/// If the grapheme doesn't contain alphabetic chars, this returns None.
+fn neutralize_grapheme(grapheme: &str) -> Option<char> {
+    grapheme.nfd()
+        .next()
+        .map(|c|c.to_ascii_lowercase())
 }
 
 impl<'a> Edit<'a> {
@@ -162,29 +175,47 @@ impl<'a> Edit<'a> {
     /// Minor errors: 1 point
     /// - punctuation
     /// - whitespace
+    /// - capitalization
+    /// - diacritical marks
     /// Major errors: 5 points
     /// - Anything else
     pub fn score(&self) -> i32 {
-        let error_string = match self.do_what {
-            EditDoWhat::Deletion(e) => e,
-            EditDoWhat::Insertion(e) => e,
-            EditDoWhat::Substitution(e) => e,
-        };
+        self.do_what.score()
+    }
+}
 
-        // Assume any grapheme that's more than one char must be a major error.
-        if error_string.chars().count() != 1 {
-            5
-        } else if let Some(ch) = error_string.chars().next() {
-            if ch.is_ascii_punctuation() {
-                1
-            } else if ch.is_whitespace() {
-                1
-            } else {
-                5
-            }
-        } else {
-            // This branch means that there is no error which is an invalid state. 
-            panic!("Edit with blank error string")
+fn value(c: char) -> i32 {
+    match c {
+        c if c.is_whitespace() => 1,
+        c if c.is_ascii_punctuation() => 1,
+        _ => 5,
+    }
+}
+
+impl<'a> EditDoWhat<'a> {
+    pub fn score(&self) -> i32 {
+        match self {
+            EditDoWhat::Deletion(error) |
+            EditDoWhat::Insertion(error) => {
+                if let Some(c) = error.chars().next() {
+                    value(c)
+                } else {
+                    eprintln!("ERROR: empty edit");
+                    0
+                }
+            },
+            EditDoWhat::Substitution { ground_truth, comparison } => {
+                let ground_truth_neutral = neutralize_grapheme(ground_truth);
+                let comparison_neutral = neutralize_grapheme(comparison);
+
+                if ground_truth_neutral == comparison_neutral {
+                    1
+                } else if let Some(c) = ground_truth_neutral {
+                    value(c)
+                } else {
+                    1
+                }
+            },
         }
     }
 }
@@ -192,6 +223,21 @@ impl<'a> Edit<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn neutralize1() {
+        assert_eq!(neutralize_grapheme("A"), neutralize_grapheme("a"));
+    }
+
+    #[test]
+    fn neutralize2() {
+        assert_eq!(neutralize_grapheme("é"), neutralize_grapheme("e"));
+    }
+
+    #[test]
+    fn neutralize3() {
+        assert_eq!(neutralize_grapheme("É"), neutralize_grapheme("e"));
+    }
     
     #[test]
     fn distance1() {
@@ -221,7 +267,7 @@ mod test {
 
         let comparison = Comparison::build(s1, s2);
         let edit = comparison.edits().next().unwrap();
-        assert_eq!(edit.do_what, EditDoWhat::Substitution(&"n"));
+        assert_eq!(edit.do_what, EditDoWhat::Substitution { ground_truth: "n", comparison: "N" });
         assert_eq!(edit.position_ground_truth, 4);
     }
 
@@ -234,11 +280,11 @@ mod test {
         let mut edits = comparison.edits();
         
         let edit = edits.next().unwrap();
-        assert_eq!(edit.do_what, EditDoWhat::Substitution(&"n"));
+        assert_eq!(edit.do_what, EditDoWhat::Substitution { ground_truth: "n", comparison: "N" });
         assert_eq!(edit.position_ground_truth, 4);
 
         let edit = edits.next().unwrap();
-        assert_eq!(edit.do_what, EditDoWhat::Substitution(&"e"));
+        assert_eq!(edit.do_what, EditDoWhat::Substitution { ground_truth: "e", comparison: "E" });
         assert_eq!(edit.position_ground_truth, 8);
     }
 
@@ -288,7 +334,7 @@ mod test {
     }
 
     #[test]
-    fn score1() {
+    fn insertion_score() {
         let s1 = "levenshtein";
         let s2 = "leenshtein";
 
@@ -297,7 +343,7 @@ mod test {
     }
 
     #[test]
-    fn score2() {
+    fn substitution_score() {
         let s1 = "levenshtein";
         let s2 = "le.enshtein";
 
@@ -306,9 +352,27 @@ mod test {
     }
 
     #[test]
-    fn score3() {
+    fn punctuation_score() {
         let s1 = "levenshtein.";
         let s2 = "levenshtein";
+
+        let comparison = Comparison::build(s1, s2);
+        assert_eq!(comparison.score(), 1);
+    }
+
+    #[test]
+    fn score_capitalization() {
+        let s1 = "Levenshtein";
+        let s2 = "levenshtein";
+
+        let comparison = Comparison::build(s1, s2);
+        assert_eq!(comparison.score(), 1);
+    }
+
+    #[test]
+    fn score_accent() {
+        let s1 = "asención";
+        let s2 = "asencion";
 
         let comparison = Comparison::build(s1, s2);
         assert_eq!(comparison.score(), 1);
